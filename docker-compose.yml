@@ -1,0 +1,218 @@
+services:
+
+  # HoneyPLC
+  honeyplc:
+    image: hub.illusioniq.com/admin/honey_plc:v1
+    container_name: honeyplc
+    restart: always
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - honeyplc
+    ports:
+      - '102:102'
+    command: /bin/bash
+    tty: true
+
+  filebeat_honeyplc:
+    image: docker.elastic.co/beats/filebeat:7.7.0
+    container_name: filebeat_honeyplc
+    command: ["--strict.perms=false", "-c", "/usr/share/filebeat/filebeat_honeyplc.yml"]
+    volumes:
+      - ./honeyplc/suricata/logs:/var/log/suricata:ro
+      - ./filebeat/filebeat_honeyplc.yml:/usr/share/filebeat/filebeat_honeyplc.yml:ro
+    networks:
+      - elk
+    environment:
+      - LS_JAVA_OPTS=-Xms256m -Xmx256m
+    restart: always
+    depends_on:
+      - suricata_honeyplc
+
+  suricata_honeyplc:
+    image: jasonish/suricata:latest
+    container_name: suricata_honeyplc
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    volumes:
+      - ./honeyplc/suricata/logs:/var/log/suricata
+      - ./honeyplc/suricata/rules:/var/lib/suricata
+      - ./honeyplc/suricata/config:/etc/suricata
+    restart: always
+    command: -i honeyplc_net
+    depends_on:
+      - honeyplc
+
+  # Gridpot
+  gridpot:
+    image: hub.illusioniq.com/admin/gridpot:v1
+    container_name: gridpot
+    restart: always
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - gridpot
+    ports:
+      - '10501:501'
+      - '10502:502'
+      - '18080:80'
+      - '10162:162'
+      - '10102:102'
+
+  filebeat_gridpot:
+    image: docker.elastic.co/beats/filebeat:7.7.0
+    command: ["--strict.perms=false", "-c", "/usr/share/filebeat/filebeat_gridpot.yml"]
+    container_name: filebeat_gridpot
+    volumes:
+      - ./gridpot/suricata/logs:/var/log/suricata:ro
+      - ./filebeat/filebeat_gridpot.yml:/usr/share/filebeat/filebeat_gridpot.yml:ro
+    networks:
+      - elk
+    environment:
+      - LS_JAVA_OPTS=-Xms256m -Xmx256m
+    restart: always
+    depends_on:
+      - suricata_gridpot
+
+  suricata_gridpot:
+    image: jasonish/suricata:latest
+    container_name: suricata_gridpot
+    command: -i gridpot_net
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    volumes:
+      - ./gridpot/suricata/logs:/var/log/suricata
+      - ./gridpot/suricata/rules:/var/lib/suricata
+      - ./gridpot/suricata/config:/etc/suricata
+    restart: always
+    depends_on:
+      - gridpot
+
+  # IIoT
+  iiot:
+    image: hub.illusioniq.com/admin/industrial_internet_of_things:v1
+    container_name: iiot
+    restart: always
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - iiot
+    ports:
+      - "25683:5683" # CoAP
+
+  iiot_modbus:
+    image: oitc/modbus-server
+    container_name: iiot_modbus
+    ports:
+      - "20502:5020"
+    volumes:
+      - ./service/custom_modbus/modbus_server.json:/app/modbus_server.json
+    networks:
+      - iiot
+
+  iiot_mqtt:
+    image: eclipse-mosquitto
+    container_name: iiot_mqtt
+    ports:
+      - "21883:1883"
+    volumes:
+      - ./service/custom_mqttd/mosquitto.conf:/mosquitto/config/mosquitto.conf
+    networks:
+      - iiot
+    environment:
+      - LOG_TYPE=all
+      - LOG_DEST=stdout
+
+  filebeat_iiot:
+    image: docker.elastic.co/beats/filebeat:7.7.0
+    container_name: filebeat_iiot
+    command: ["--strict.perms=false", "-c", "/usr/share/filebeat/filebeat_iiot.yml"]
+    volumes:
+      - ./iiot/suricata/logs:/var/log/suricata:ro
+      - ./filebeat/filebeat_iiot.yml:/usr/share/filebeat/filebeat_iiot.yml:ro
+    networks:
+      - elk
+    environment:
+      - LS_JAVA_OPTS=-Xms256m -Xmx256m
+    restart: always
+    depends_on:
+      - suricata_iiot
+
+  suricata_iiot:
+    image: jasonish/suricata:latest
+    container_name: suricata_iiot
+    command: -i iiot_net
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    volumes:
+      - ./iiot/suricata/logs:/var/log/suricata
+      - ./iiot/suricata/rules:/var/lib/suricata
+      - ./iiot/suricata/config:/etc/suricata
+    restart: always
+    depends_on:
+      - iiot
+      - iiot_modbus
+      - iiot_mqtt
+
+  # Agent
+  agent:
+    build: 
+      context: .
+      dockerfile: ./agent/agent_dockerfile
+    container_name: agent_iiot
+    restart: always
+    ports:
+      - "9090:9090"
+    networks:
+      - agent
+      - elk
+    depends_on:
+      - elasticsearch
+
+  # Elasticsearch
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.7.0
+    container_name: elasticsearch
+    networks:
+      - elk
+    depends_on:
+      - honeyplc
+      - gridpot
+      - iiot
+      - suricata_honeyplc
+      - suricata_iiot
+      - suricata_gridpot
+    environment:
+      - cluster.name=elk
+      - network.host=0.0.0.0
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+    restart: always
+
+# Networks
+networks:
+  honeyplc:
+    internal: false
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: honeyplc_net
+  gridpot:
+    internal: false
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: gridpot_net
+  iiot:
+    internal: false
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: iiot_net
+  elk:
+    internal: true
+  agent:
+    internal: false

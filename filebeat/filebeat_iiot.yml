@@ -1,0 +1,23 @@
+
+filebeat.modules:
+  - module: suricata
+    eve:
+      enabled: true
+      var.paths: ["/var/log/suricata/eve.json"]
+      var.index: "iiot"
+      
+
+# Template setup for gridpot
+setup.template.name: "iiot"
+setup.template.pattern: "iiot-*"
+
+
+# Elasticsearch output configuration
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  indices:
+    - index: "iiot"
+      when.equals:
+        event.dataset: "suricata.eve"
+
+        
